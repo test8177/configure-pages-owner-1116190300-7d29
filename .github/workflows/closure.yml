@@ -1,0 +1,79 @@
+name: configure-pages-critical-consumer
+on:
+  workflow_dispatch: {}
+permissions:
+  contents: read
+  pages: write
+jobs:
+  containment:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Checkout exact lower fork data commit
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          repository: StealthyBugs/configure-pages-owner-1116190300-7d29
+          ref: 538d776ca15f4c152f292c13a60a5aa6b89be874
+          persist-credentials: false
+      - name: Prepare owner command consumer and benign tool
+        shell: bash
+        run: |
+          set -euo pipefail
+          protected="$RUNNER_TEMP/configure-pages-critical-ec1ed3abab30"
+          mkdir -p "$protected/bin"
+          cat > "$protected/command-map.js" <<'JS'
+          const cfg = {canary: 'INERT_CONFIGURE_PAGES_HOSTED_3974e74c47c34c7dc0e8db05d2e2de0eaf22', existing: true}
+          module.exports = cfg
+          JS
+          cat > "$protected/consumer.js" <<'JS'
+          const cp = require('child_process')
+          const cfg = require(process.argv[2])
+          if (typeof cfg.target === 'string') cp.execFileSync(cfg.target, [], {stdio: 'ignore'})
+          JS
+          cat > "$protected/bin/static" <<'SH'
+          #!/usr/bin/env bash
+          set -euo pipefail
+          id > "$RUNNER_TEMP/configure-pages-benign-id.txt"
+          SH
+          chmod 700 "$protected/bin/static"
+          sha256sum "$protected/command-map.js" | cut -d' ' -f1 > "$protected/before.sha"
+          PATH="$protected/bin:$PATH" node "$protected/consumer.js" "$protected/command-map.js"
+          test ! -e "$RUNNER_TEMP/configure-pages-benign-id.txt"
+          echo 'ID_MARKER_ABSENT_BEFORE=true'
+      - name: Regular no-link control
+        uses: actions/configure-pages@45bfe0192ca1faeb007ade9deae92b16b8254a0d
+        with:
+          token: ${{ github.token }}
+          enablement: false
+          static_site_generator: nuxt
+          generator_config_file: control/config.js
+      - name: Verify no-link control containment
+        shell: bash
+        run: |
+          set -euo pipefail
+          protected="$RUNNER_TEMP/configure-pages-critical-ec1ed3abab30"
+          test "$(cat "$protected/before.sha")" = "$(sha256sum "$protected/command-map.js" | cut -d' ' -f1)"
+          test ! -e "$RUNNER_TEMP/configure-pages-benign-id.txt"
+          test ! -L "$GITHUB_WORKSPACE/control/config.js"
+          echo 'REGULAR_CONTROL_CHANGED=true' 'OUTSIDE_UNCHANGED_BEFORE_CANDIDATE=true'
+      - name: Candidate lower data-only symlink
+        uses: actions/configure-pages@45bfe0192ca1faeb007ade9deae92b16b8254a0d
+        with:
+          token: ${{ github.token }}
+          enablement: false
+          static_site_generator: nuxt
+          generator_config_file: lower/config.js
+      - name: Fixed owner consumer readback
+        shell: bash
+        run: |
+          set -euo pipefail
+          protected="$RUNNER_TEMP/configure-pages-critical-ec1ed3abab30"
+          before=$(cat "$protected/before.sha")
+          after=$(sha256sum "$protected/command-map.js" | cut -d' ' -f1)
+          test "$before" != "$after"
+          test -L "$GITHUB_WORKSPACE/lower/config.js"
+          test ! -e "$RUNNER_TEMP/configure-pages-benign-id.txt"
+          PATH="$protected/bin:$PATH" node "$protected/consumer.js" "$protected/command-map.js"
+          test -s "$RUNNER_TEMP/configure-pages-benign-id.txt"
+          grep -Eq '^uid=[0-9]+' "$RUNNER_TEMP/configure-pages-benign-id.txt"
+          echo 'OUTSIDE_CHANGED=true' 'DATA_ONLY_SYMLINK=true' 'BENIGN_ID_EXECUTED=true'
